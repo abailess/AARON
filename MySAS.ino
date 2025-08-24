@@ -49,7 +49,7 @@ void selectMuxChannel(uint8_t channel) {
 /////////////////////////////////////////////////////////////
 
 /* Set the delay between fresh samples */
-uint16_t BNO055_SAMPLERATE_DELAY_MS = 10000;
+//uint16_t BNO055_SAMPLERATE_DELAY_MS = 10000;
 
 void setup(void)
 {
@@ -85,7 +85,7 @@ void setup(void)
   for (int i = 0; i < 3; i++) {
     selectMuxChannel(i + 1);
     sensors[i].setATIME(255); //0 - 255max, the integration time PER STEP in incraments of 2.78us. So, at ATIME = 1, we can assume each step takes in light for 2.78us, at 255, each step is ~ 709us (still very short)
-
+                              // for reference ~5.4us is the time it takes light to travel one mile in a vacuum. 
     sensors[i].setASTEP(1);   //ASTEP 999 = 2.78ms (0 min - 65534 is max value, corresponds to 182ms) This is the number of integration steps...
 
     sensors[i].setGain(AS7341_GAIN_64X); //gain options: 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512
@@ -133,7 +133,7 @@ void loop(void)
   Serial.print(accel);
   Serial.print(" Mag=");
   Serial.println(mag);
-  Serial.println("*************************");
+  Serial.println("____________________________________________________");
 
 
   // ------------------ Spectral Sensor ------------------
@@ -146,30 +146,28 @@ for (int s = 0; s < 3; s++) {
   if (!sensors[s].readAllChannels(readings)) {
     Serial.print("Error reading AS7341 channels: ");
     Serial.println(s + 1);
-  } else {
-    Serial.print("Spec ");
-    Serial.print(s + 1);
-    Serial.println(" : 415, 445, 480, 515, 555, 590, 630, 680, 930");
+    continue; //skip to next sensor
+  }
+
+  Serial.print("Spec ");
+  Serial.print(s + 1);
+  Serial.println(" : 415, 445, 480, 515, 555, 590, 630, 680, 930");
     
-    for (int i = 0; i < 12; i++) {
-      Serial.print(readings[i]);
-      if (i < 11) Serial.print(", ");
-    }
+  for (int i = 0; i < 12; i++) {
+    Serial.print(readings[i]);
+    if (i < 11) Serial.print(", ");
+  }
 
-    String dataString = "";
-    dataString += " [ASTEP:" + String(sensors[s].getASTEP()) + ",";
-    dataString += "ATIME:" + String(sensors[s].getATIME()) + ",";
-    dataString += "GAIN:" + String(sensors[s].getGain()) + "]";
-    Serial.println(dataString);
-    Serial.println();
-    }
-
-  Serial.println("--");
-  delay(BNO055_SAMPLERATE_DELAY_MS);
+  String dataString = "";
+  dataString += " [ASTEP:" + String(sensors[s].getASTEP()) + ",";
+  dataString += "ATIME:" + String(sensors[s].getATIME()) + ",";
+  dataString += "GAIN:" + String(sensors[s].getGain()) + "]";
+  Serial.println(dataString);
   
   // ---- Adaptive exposure ----
   int checkChannels[] = {0, 1, 2, 3, 6, 7, 8, 9, 11};
-  bool tooHigh = false, tooLow = false;
+  bool tooHigh = false;
+  bool tooLow = false;
 
   for (int i = 0; i < sizeof(checkChannels) / sizeof(checkChannels[0]); i++) {
     int val = readings[checkChannels[i]];
@@ -177,32 +175,22 @@ for (int s = 0; s < 3; s++) {
     if (val < 1000) tooLow = true;
   }
 
-  for (int i = 0; i < 3; i++) {
-      selectMuxChannel(i + 1);
-      uint16_t astep = sensors[i].getASTEP();
-      bool tooHigh = false, tooLow = false;
-      int checkChannels[] = {0, 1, 2, 3, 6, 7, 8, 9, 11};
-
-      for (int j = 0; j < sizeof(checkChannels)/sizeof(checkChannels[0]); j++) {
-          int val = readings[checkChannels[j]];
-          if (val > 60000) tooHigh = true;
-          if (val < 1000) tooLow = true;
-      }
-
-      if (tooHigh && astep > 500) {
-          sensors[i].setASTEP(max(500, astep - 2000));
-          Serial.print("Sensor ");
-          Serial.print(i+1);
-          Serial.println(" decreasing ASTEP");
-      } else if (tooLow && astep < 60000) {
-          sensors[i].setASTEP(min(60000, astep + 2000));
-          Serial.print("Sensor ");
-          Serial.print(i+1);
-          Serial.println(" increasing ASTEP");
-      }
+  uint16_t astep = sensors[s].getASTEP();
+  if (tooHigh && astep > 500) {
+    sensors[s].setASTEP(max(500, astep - 2000));
+    Serial.print("*Spec ");
+    Serial.print(s + 1);
+    Serial.println(" decreasing ASTEP*");
   }
+  else if (tooLow && astep < 60000) {
+    sensors[s].setASTEP(min(60000, astep + 2000));
+    Serial.print("*Spec ");
+    Serial.print(s + 1);
+    Serial.println(" increasing ASTEP*");
+  }
+  }
+  Serial.println("----------------------------------------------------");
 }
-}  
 
 
 // ------------ printEvent helper ------------
@@ -246,7 +234,7 @@ void printEvent(sensors_event_t* event) {
     z = event->acceleration.z;
   }
   else if (event->type == SENSOR_TYPE_GRAVITY) {
-    Serial.print("Gravity:");
+    Serial.print("Grav:");
     x = event->acceleration.x;
     y = event->acceleration.y;
     z = event->acceleration.z;
