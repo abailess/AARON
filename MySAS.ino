@@ -1,3 +1,5 @@
+//Code by Alexander Bailess and Ian Black, using Adafruit base codes for AMS and BNO sensors 
+
 #include <Wire.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BNO055.h>
