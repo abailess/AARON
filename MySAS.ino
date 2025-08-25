@@ -1,6 +1,5 @@
-//Code by Alexander Bailess and Ian Black, using Adafruit base codes for AMS and BNO sensors 
-
 #include <Wire.h>
+#include <RTClib.h>  
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BNO055.h>
 #include <Adafruit_AS7341.h>
@@ -12,6 +11,8 @@ Adafruit_BNO055 bno = Adafruit_BNO055(55, 0x28, &Wire);
 
 /* Initialize Spec Sensors on channels 1, 2, 3 (BNO055 is on channel 0) */
 Adafruit_AS7341 sensors[3]; 
+
+RTC_PCF8523 rtc; 
 
 /////////////////////////////////////////////////////////////
 //setup for the 4 channel multiplexer
@@ -44,6 +45,16 @@ void setup(void)
   }
   delay(1000);
 
+  if (!rtc.begin()) {
+    Serial.println("Couldn't find RTC");
+    while (1);
+  }
+
+  if (!rtc.initialized() || rtc.lostPower()) {
+    Serial.println("RTC lost power, setting time!");
+    rtc.adjust(DateTime(F(__DATE__), F(__TIME__))); // compile-time default
+  }
+
 // ---- Initialize AS7341 on channel 1 ----
   for (int i = 0; i < 3; i++) {
       selectMuxChannel(i + 1);  // +1 because channels 1-3 for spectral sensors
@@ -66,7 +77,7 @@ void setup(void)
                               // for reference ~5.4us is the time it takes light to travel one mile in a vacuum. 
     sensors[i].setASTEP(1);   //ASTEP 999 = 2.78ms (0 min - 65534 is max value, corresponds to 182ms) This is the number of integration steps...
 
-    sensors[i].setGain(AS7341_GAIN_64X); //gain options: 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512
+    sensors[i].setGain(AS7341_GAIN_16X); //gain options: 0.5, 1, 2, 4, 8, 16, 32, 64, 128, 256, 512
 }
 
 
@@ -76,6 +87,23 @@ void setup(void)
 
 void loop(void)
 {
+  // ------------------ RTC ------------------
+  DateTime now = rtc.now();
+  Serial.print("Log Time: ");
+  Serial.print(now.year(), DEC);
+  Serial.print('/');
+  Serial.print(now.month(), DEC);
+  Serial.print('/');
+  Serial.print(now.day(), DEC);
+  Serial.print(' ');
+  Serial.print(now.hour(), DEC);
+  Serial.print(':');
+  Serial.print(now.minute(), DEC);
+  Serial.print(':');
+  Serial.print(now.second(), DEC);
+  Serial.println();
+  Serial.println();
+
   // ------------------ IMU ------------------
   selectMuxChannel(0);
 
@@ -97,7 +125,7 @@ void loop(void)
 
   int8_t boardTemp = bno.getTemp();
   Serial.println();
-  Serial.print(F("temperature: "));
+  Serial.print(F("Temperature: "));
   Serial.println(boardTemp);
 
   uint8_t system, gyro, accel, mag = 0;
@@ -135,36 +163,54 @@ for (int s = 0; s < 3; s++) {
     Serial.print(readings[i]);
     if (i < 11) Serial.print(", ");
   }
+  const char* gainNames[] = {
+    "0.5X", "1X", "2X", "4X", "8X", "16X", "32X", "64X", "128X", "256X", "512X"
+  };
 
   String dataString = "";
-  dataString += " [ASTEP:" + String(sensors[s].getASTEP()) + ",";
-  dataString += "ATIME:" + String(sensors[s].getATIME()) + ",";
-  dataString += "GAIN:" + String(sensors[s].getGain()) + "]";
+  dataString += " [ASTEP: " + String(sensors[s].getASTEP()) + ", ";
+  dataString += "ATIME: " + String(sensors[s].getATIME()) + ", ";
+  dataString += "GAIN: " + String(gainNames[sensors[s].getGain()]) + "]";
   Serial.println(dataString);
   
   // ---- Adaptive exposure ----
+  uint16_t astep = sensors[s].getASTEP();
+  as7341_gain_t gain = sensors[s].getGain();
+
   int checkChannels[] = {0, 1, 2, 3, 6, 7, 8, 9, 11};
   bool tooHigh = false;
   bool tooLow = false;
 
   for (int i = 0; i < sizeof(checkChannels) / sizeof(checkChannels[0]); i++) {
     int val = readings[checkChannels[i]];
-    if (val > 60000) tooHigh = true;
+    if (val > 60000) tooHigh = true; 
     if (val < 1000) tooLow = true;
   }
 
-  uint16_t astep = sensors[s].getASTEP();
-  if (tooHigh && astep > 500) {
-    sensors[s].setASTEP(max(500, astep - 2000));
-    Serial.print("*Spec ");
-    Serial.print(s + 1);
-    Serial.println(" decreasing ASTEP*");
+  const uint16_t ASTEP_MIN = 1;        // lower bound
+  const uint16_t ASTEP_MAX = 7000;    // setting max ASTEP of 15,000 with ATIME fixed @ 255 means total read time of max 10.6s, in reality to appears closer to 20s
+                                      //tests show 7000 to be ~ 10s
+
+  const as7341_gain_t GAIN_MIN = AS7341_GAIN_0_5X; // int map 0
+  const as7341_gain_t GAIN_MAX = AS7341_GAIN_512X; //int map 10
+
+  if (tooHigh) {
+    if (gain > GAIN_MIN) {
+      sensors[s].setGain((as7341_gain_t)(gain - 1));
+      Serial.print("*Spec "); Serial.print(s + 1); Serial.println(" decreasing GAIN...*");
+    } else if (astep > ASTEP_MIN) {
+      sensors[s].setASTEP(max(ASTEP_MIN, (uint16_t)(astep - 2000)));
+      Serial.print("*Spec "); Serial.print(s + 1); Serial.println(" decreasing ASTEP...*");
+    }     
   }
-  else if (tooLow && astep < 60000) {
-    sensors[s].setASTEP(min(60000, astep + 2000));
-    Serial.print("*Spec ");
-    Serial.print(s + 1);
-    Serial.println(" increasing ASTEP*");
+  else if (tooLow) {
+    if (astep < ASTEP_MAX) {
+      sensors[s].setASTEP(min(ASTEP_MAX, (uint16_t)(astep + 2000)));
+      Serial.print("*Spec "); Serial.print(s + 1); Serial.println(" increasing ASTEP...*");
+    } else if (gain < GAIN_MAX) {
+      sensors[s].setGain((as7341_gain_t)(gain + 1));
+      Serial.print("*Spec "); Serial.print(s + 1); Serial.println(" increasing GAIN...*");
+    }
   }
   }
   Serial.println("----------------------------------------------------");
